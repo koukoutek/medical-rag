@@ -43,7 +43,15 @@ class Record:
 
 
 def clean_text(text: str) -> str:
-    """Basic cleanup suitable for downstream chunking."""
+    """
+    Clean and normalize text for downstream chunking.
+
+    Args:
+        text: Raw text string to clean, typically from PDF or document extraction.
+
+    Returns:
+        Cleaned and normalized text ready for chunking and downstream NLP tasks.
+    """
     text = text.replace("\x00", " ")
     # Fix common PDF hyphenation across line breaks: "exam-\nple" -> "example"
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
@@ -56,6 +64,18 @@ def clean_text(text: str) -> str:
 
 
 def infer_title_from_pdf(reader: PdfReader, path: Path) -> str:
+    """
+    Extract or infer a title from a PDF document. If metadata is not available
+    or does not contain a valid title, falls back to using the filename stem.
+    
+    Args:
+        reader (PdfReader): A PdfReader object representing the PDF document.
+        path (Path): A Path object pointing to the PDF file.
+    
+    Returns:
+        str: The PDF title from metadata, or the filename stem if no title is found.
+    
+    """
     meta = reader.metadata
     if meta:
         title = getattr(meta, "title", None) or meta.get("/Title")
@@ -65,6 +85,19 @@ def infer_title_from_pdf(reader: PdfReader, path: Path) -> str:
 
 
 def infer_title_from_text(path: Path, text: str) -> str:
+    """
+    Extract a title from text content, using the first non-empty line as preference. 
+    If no non-empty lines are found, falls back to using the filename stem from the 
+    provided path.
+    
+    Args:
+        path: A Path object representing the file, used as fallback for title generation.
+        text: The text content to extract a title from.
+    
+    Returns:
+        A string representing the inferred title, truncated to 200 characters maximum
+        if derived from text, or the filename stem if no suitable text is found.
+    """
     # Use first non-empty line as a lightweight title guess, else filename.
     for line in text.splitlines():
         line = line.strip()
@@ -74,12 +107,45 @@ def infer_title_from_text(path: Path, text: str) -> str:
 
 
 def iter_input_files(raw_dir: Path) -> Iterable[Path]:
+    """
+    Iterate over input files in a directory recursively.
+    
+    Args:
+        raw_dir: The root directory to search for input files.
+    
+    Yields:
+        Path: Absolute paths to files with extensions in INPUT_EXTS.
+    """
     for p in sorted(raw_dir.rglob("*")):
         if p.is_file() and p.suffix.lower() in INPUT_EXTS:
             yield p
 
 
 def process_pdf(path: Path) -> List[Record]:
+    """
+    Extract and process text content from a PDF file.
+    
+    Reads a PDF file from the given path, extracts text from each page,
+    cleans the extracted text, and creates Record objects containing the
+    processed content along with metadata.
+    
+    Args:
+        path (Path): The file system path to the PDF file to process.
+    
+    Returns:
+        List[Record]: A list of Record objects, one for each page in the PDF.
+            Each Record contains:
+            - doc_id: Stem of the filename
+            - title: Inferred title from PDF metadata or filename
+            - page_number: Page number (1-indexed)
+            - source_path: Full file path as string
+            - file_type: "pdf"
+            - text: Cleaned text content from the page
+    
+    Raises:
+        FileNotFoundError: If the PDF file does not exist.
+        PdfReadError: If the PDF file cannot be read or is corrupted.
+    """
     reader = PdfReader(str(path))
     title = infer_title_from_pdf(reader, path)
     records: List[Record] = []
@@ -101,6 +167,28 @@ def process_pdf(path: Path) -> List[Record]:
 
 
 def process_text_file(path: Path) -> List[Record]:
+    """
+    Process a text file and extract its content into a structured Record.
+    
+    Reads a text file, cleans its content, infers a title, and returns a list
+    containing a single Record object with the file's metadata and processed text.
+    
+    Args:
+        path (Path): The file path to the text file to process.
+    
+    Returns:
+        List[Record]: A list containing a single Record object with:
+            - doc_id: The file stem (filename without extension)
+            - title: Inferred title from the file content or metadata
+            - page_number: None (not applicable for text files)
+            - source_path: The string representation of the file path
+            - file_type: The file extension (without the leading dot, lowercase)
+            - text: The cleaned text content of the file
+    
+    Raises:
+        FileNotFoundError: If the file does not exist at the specified path.
+        UnicodeDecodeError: Potential errors are ignored during encoding.
+    """
     raw = path.read_text(encoding="utf-8", errors="ignore")
     text = clean_text(raw)
     title = infer_title_from_text(path, raw)
@@ -117,6 +205,19 @@ def process_text_file(path: Path) -> List[Record]:
 
 
 def write_jsonl(records: List[Record], out_path: Path) -> None:
+    """
+    Write a list of records to a JSONL (JSON Lines) file.
+    
+    Each record is converted to a dictionary and written as a single JSON object
+    per line in the output file. The output directory is created if it does not exist.
+    
+    Args:
+        records: A list of Record objects to be written to the file.
+        out_path: The Path object specifying the output file location.
+    
+    Returns:
+        None
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         for r in records:
@@ -124,6 +225,22 @@ def write_jsonl(records: List[Record], out_path: Path) -> None:
 
 
 def write_text_files(records: List[Record], out_dir: Path) -> None:
+    """
+    Write records to text files organized by document ID.
+    
+    Groups records by their document ID, sorts them by page number (if available),
+    and writes the combined text content to individual files in the output directory.
+    Pages are prefixed with a header indicating the page number, while non-paged
+    text is appended as-is.
+    
+    Args:
+        records: A list of Record objects to be written to files.
+        out_dir: The Path object specifying the output directory where text files
+                 will be created. The directory is created if it doesn't exist.
+    
+    Returns:
+        None
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     grouped = {}
