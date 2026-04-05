@@ -62,12 +62,35 @@ REQUIRED_FIELDS = {"chunk_id", "doc_id", "page_number", "chunk_text"}
 
 
 def set_reproducible_seed(seed: int = 42) -> None:
+    """
+    Set deterministic seeds for common Python randomness sources.
+    This utility initializes reproducibility settings by seeding:
+    - `random` (Python standard library RNG)
+    - `numpy.random` (NumPy RNG)
+    - `PYTHONHASHSEED` (hash randomization for Python objects)
+    Args:
+        seed (int, optional): Seed value used across all configured randomness
+            sources. Defaults to `42`.
+    Returns:
+        None
+    """
     random.seed(seed)
     np.random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    """
+    Read a JSONL file and return a list of dictionaries.
+
+    Args:
+        path (Path): Path to the JSONL file.
+
+    Returns:
+        List[Dict[str, Any]]: List of dictionaries representing the JSONL rows.
+    Raises:
+        ValueError: If any line in the file is not valid JSON or is missing required fields.
+    """
     rows: List[Dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
@@ -86,16 +109,50 @@ def read_jsonl(path: Path) -> List[Dict[str, Any]]:
 
 
 def stable_sort_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # chunk_id may be numeric or string. Sorting by string keeps ordering stable across runs.
+    """
+    Return a stably sorted copy of row dictionaries by their ``chunk_id`` value.
+    The sort key is computed as ``str(row["chunk_id"])``, so all ``chunk_id`` values
+    are compared lexicographically as strings. Python's sort is stable, meaning rows
+    with equal stringified ``chunk_id`` values keep their original relative order.
+    Args:
+        rows: A list of dictionaries, each expected to contain a ``"chunk_id"`` key.
+    Returns:
+        A new list of dictionaries sorted by stringified ``chunk_id``.
+    """
     return sorted(rows, key=lambda r: str(r["chunk_id"]))
 
 
 def batched(iterable: List[Dict[str, Any]], batch_size: int) -> Iterable[List[Dict[str, Any]]]:
+    """
+    Yield successive fixed-size batches from a list of dictionaries.
+    Args:
+        iterable (List[Dict[str, Any]]): The input sequence to split into batches.
+        batch_size (int): Number of items per batch.
+    Yields:
+        List[Dict[str, Any]]: Consecutive slices of `iterable` with at most
+        `batch_size` elements each. The final batch may be smaller.
+    Raises:
+        ValueError: If `batch_size` is less than 1.
+    """
+    if batch_size < 1:
+        raise ValueError("Batch size must be a positive integer.")
     for i in range(0, len(iterable), batch_size):
         yield iterable[i : i + batch_size]
 
 
 def build_embeddings(rows: List[Dict[str, Any]], model_name: str, batch_size: int, normalize: bool) -> np.ndarray:
+    """
+    Build dense vector embeddings for a list of text chunks using a SentenceTransformer model.
+    Args:
+        rows (List[Dict[str, Any]]): Input records containing a ``"chunk_text"`` field for each row.
+        model_name (str): Name or path of the SentenceTransformer model to load.
+        batch_size (int): Number of texts to encode per batch.
+        normalize (bool): Whether to L2-normalize embeddings during encoding.
+    Returns:
+        np.ndarray: A 2D NumPy array of shape ``(len(rows), embedding_dim)`` with dtype ``float32``.
+    Raises:
+        ValueError: If the produced embeddings are not a 2D array.
+    """
     model = SentenceTransformer(model_name)
     texts = [row["chunk_text"] for row in rows]
     embeddings = model.encode(
@@ -112,6 +169,18 @@ def build_embeddings(rows: List[Dict[str, Any]], model_name: str, batch_size: in
 
 
 def build_faiss_index(embeddings: np.ndarray, normalize: bool) -> faiss.Index:
+    """
+    Build and populate a FAISS index from embedding vectors.
+    Creates either:
+    - `faiss.IndexFlatIP` when `normalize=True` (for cosine-like similarity with pre-normalized vectors), or
+    - `faiss.IndexFlatL2` when `normalize=False` (for Euclidean distance).
+    The index dimension is inferred from `embeddings.shape[1]`, and all provided embeddings are added to the index.
+    Args:
+        embeddings (np.ndarray): 2D array of shape `(n_vectors, dim)` containing embedding vectors.
+        normalize (bool): If `True`, use inner-product index; otherwise use L2 index.
+    Returns:
+        faiss.Index: A FAISS index containing the input embeddings.
+    """
     dim = embeddings.shape[1]
     if normalize:
         index = faiss.IndexFlatIP(dim)
@@ -122,6 +191,26 @@ def build_faiss_index(embeddings: np.ndarray, normalize: bool) -> faiss.Index:
 
 
 def write_metadata(rows: List[Dict[str, Any]], output_path: Path) -> None:
+    """
+    Write per-chunk metadata records to a JSON Lines file.
+    Each input row is assigned a sequential `vector_id` based on its position
+    in `rows` (starting at 0). For every row, a JSON object is written as a
+    single line to `output_path` with the following fields:
+    - `vector_id`: Enumerated index of the row.
+    - `chunk_id`: Chunk identifier from the row.
+    - `doc_id`: Source document identifier from the row.
+    - `page_number`: Page number associated with the chunk.
+    - `chunk_text`: Text content of the chunk.
+    Args:
+        rows: List of metadata dictionaries. Each dictionary is expected to
+            contain the keys: `chunk_id`, `doc_id`, `page_number`, and
+            `chunk_text`.
+        output_path: Destination path for the JSONL output file. The file is
+            opened in write mode (`"w"`) with UTF-8 encoding and will be
+            overwritten if it already exists.
+    Returns:
+        None.
+    """
     with output_path.open("w", encoding="utf-8") as f:
         for vector_id, row in enumerate(rows):
             record = {
@@ -135,6 +224,15 @@ def write_metadata(rows: List[Dict[str, Any]], output_path: Path) -> None:
 
 
 def write_config(config: IndexConfig, output_path: Path) -> None:
+    """
+    Write an ``IndexConfig`` instance to a JSON file.
+    Serializes ``config`` using :func:`dataclasses.asdict` and writes it to
+    ``output_path`` with UTF-8 encoding, pretty-printed using an indentation of 2
+    spaces, followed by a trailing newline.
+    Args:
+        config: The index configuration object to serialize.
+        output_path: Destination path for the generated JSON file.
+    """
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(asdict(config), f, indent=2)
         f.write("\n")
@@ -192,5 +290,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-
-#### NEED TO ADD DOCUMENTATION STRINGS TO THE FUNCTIONS ABOVE ####
