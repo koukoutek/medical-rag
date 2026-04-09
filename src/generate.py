@@ -34,9 +34,15 @@ Rules:
 
 def extract_chunks(retrieval_output: Any) -> List[Dict[str, Any]]:
     """
-    Accepts either:
-    1. a flat list of chunk dicts
-    2. a wrapper like [{"query": ..., "results": [...]}]
+    Extract chunks from retrieval output.
+    Handles multiple retrieval output formats:
+    - If output is a list with a dict containing "results" key, returns the results list
+    - If output is a list, returns it as-is
+    - Otherwise returns an empty list
+    Args:
+        retrieval_output (Any): The output from a retrieval operation, typically a list or nested dict structure.
+    Returns:
+        List[Dict[str, Any]]: A list of chunk dictionaries extracted from the retrieval output.
     """
     if isinstance(retrieval_output, list) and retrieval_output:
         first = retrieval_output[0]
@@ -46,6 +52,32 @@ def extract_chunks(retrieval_output: Any) -> List[Dict[str, Any]]:
     return []
 
 def format_context(retrieval_output: Any) -> str:
+    """
+    Format retrieved chunks into a readable context string.
+    This function extracts chunks from ``retrieval_output`` using
+    ``extract_chunks()`` and renders each chunk as a block containing:
+    - the chunk identifier in square brackets,
+    - an optional relevance score formatted to 4 decimal places,
+    - the chunk text.
+    Each chunk block is separated by a blank line.
+    Args:
+        retrieval_output: Raw retrieval result object containing chunk data in a
+            format supported by ``extract_chunks()``.
+    Returns:
+        A single formatted string containing all retrieved chunks. Returns an
+        empty string if no chunks are extracted.
+    Expected chunk fields:
+        Each extracted chunk is expected to be a mapping that may contain:
+        - ``chunk_id``: Identifier for the chunk. Defaults to ``"chunk_{i}"``.
+        - ``chunk_text``: Text content of the chunk. Defaults to an empty string.
+        - ``score``: Numeric relevance score. Included only if it is an ``int`` or
+          ``float``.
+    Example output:
+        [chunk_1] (score=0.9123)
+        Some retrieved text here.
+        [chunk_2]
+        Another retrieved text block.
+    """
     retrieved_chunks = extract_chunks(retrieval_output)
 
     parts = []
@@ -57,7 +89,32 @@ def format_context(retrieval_output: Any) -> str:
         parts.append(f"[{chunk_id}]{score_text}\n{chunk_text}")
     return "\n\n".join(parts)
 
-def build_messages(query: str, retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+def build_messages(query: str, retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, str]]:  
+    """
+    Build a list of messages for the RAG assistant.
+    This function constructs a structured message list suitable for use with
+    a chat-based language model API. It formats the retrieved context chunks
+    and combines them with the user query into a prompt that instructs the
+    model to answer based solely on the provided context.
+    Args:
+        query (str): The user's input question to be answered.
+        retrieved_chunks (List[Dict[str, Any]]): A list of retrieved document
+            chunks, where each chunk is a dictionary containing chunk metadata
+            and content used to build the context.
+    Returns:
+        List[Dict[str, str]]: A list of message dictionaries, each containing
+            a 'role' (either 'system' or 'user') and 'content' key, formatted
+            for use with a chat completion API. The system message contains
+            the predefined SYSTEM_PROMPT, while the user message contains
+            the query and formatted context.
+    Example:
+        >>> chunks = [{"id": "chunk_1", "text": "Paris is the capital of France."}]
+        >>> messages = build_messages("What is the capital of France?", chunks)
+        >>> messages[0]["role"]
+        'system'
+        >>> messages[1]["role"]
+        'user'
+    """    
     context = format_context(retrieved_chunks)
     user_prompt = f"""Question: {query} Context: {context} \
         Write the answer using only the context above. 
@@ -71,6 +128,24 @@ def build_messages(query: str, retrieved_chunks: List[Dict[str, Any]]) -> List[D
     ]
 
 def generate_answer_local(messages: List[Dict[str, str]], model: str = "llama3:8b") -> str:
+    """
+    Generate an answer using a local Ollama model.
+    Args:
+        messages (List[Dict[str, str]]): A list of message dictionaries containing
+            the conversation history, where each dictionary has 'role' and 'content' keys.
+        model (str, optional): The name of the Ollama model to use for generation.
+            Defaults to "llama3:8b".
+    Returns:
+        str: The generated answer from the model, stripped of leading/trailing whitespace.
+    Raises:
+        RuntimeError: If the Ollama generation fails for any reason, wrapping the
+            original exception message.
+    Example:
+        >>> messages = [{"role": "user", "content": "What is the capital of France?"}]
+        >>> answer = generate_answer_local(messages, model="llama3:8b")
+        >>> print(answer)
+        'Paris is the capital of France.'
+    """
     print("Generating answer with model:", model)
     try:
         response = ollama.chat(
@@ -86,6 +161,21 @@ def generate_answer_local(messages: List[Dict[str, str]], model: str = "llama3:8
         raise RuntimeError(f"Ollama generation failed: {str(e)}")
 
 def load_retrieved(path: str) -> List[Dict[str, Any]]:
+    """
+    Load retrieved chunks from a JSON file.
+    Args:
+        path (str): The file path to the JSON file containing the retrieved chunks.
+    Returns:
+        List[Dict[str, Any]]: A list of dictionaries representing the retrieved chunk objects.
+    Raises:
+        ValueError: If the JSON file does not contain a list of chunk objects.
+        FileNotFoundError: If the file at the specified path does not exist.
+        json.JSONDecodeError: If the file content is not valid JSON.
+    Example:
+        >>> chunks = load_retrieved("retrieved_chunks.json")
+        >>> print(chunks[0])
+        {'id': '1', 'text': 'example chunk text', 'metadata': {...}}
+    """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
