@@ -127,38 +127,87 @@ def build_messages(query: str, retrieved_chunks: List[Dict[str, Any]]) -> List[D
         {"role": "user", "content": user_prompt},
     ]
 
-def generate_answer_local(messages: List[Dict[str, str]], model: str = "llama3:8b") -> str:
+# def generate_answer_local(messages: List[Dict[str, str]], model: str = "llama3:8b") -> str:
+#     """
+#     Generate an answer using a local Ollama model.
+#     Args:
+#         messages (List[Dict[str, str]]): A list of message dictionaries containing
+#             the conversation history, where each dictionary has 'role' and 'content' keys.
+#         model (str, optional): The name of the Ollama model to use for generation.
+#             Defaults to "llama3:8b".
+#     Returns:
+#         str: The generated answer from the model, stripped of leading/trailing whitespace.
+#     Raises:
+#         RuntimeError: If the Ollama generation fails for any reason, wrapping the
+#             original exception message.
+#     Example:
+#         >>> messages = [{"role": "user", "content": "What is the capital of France?"}]
+#         >>> answer = generate_answer_local(messages, model="llama3:8b")
+#         >>> print(answer)
+#         'Paris is the capital of France.'
+#     """
+#     print("Generating answer with model:", model)
+#     try:
+#         response = ollama.chat(
+#             model=model,
+#             messages=messages,
+#             options={
+#                 "temperature": 0.0,   # keep deterministic for RAG
+#             }
+#         )
+#         return response.message.content.strip()
+#
+#    except Exception as e:
+#        raise RuntimeError(f"Ollama generation failed: {str(e)}")
+
+
+def generate_answer_local(messages: List[Dict[str, str]], model: str = "llama3:8b", temperature: float = 0.0,) -> str:
     """
     Generate an answer using a local Ollama model.
+
     Args:
-        messages (List[Dict[str, str]]): A list of message dictionaries containing
-            the conversation history, where each dictionary has 'role' and 'content' keys.
-        model (str, optional): The name of the Ollama model to use for generation.
-            Defaults to "llama3:8b".
+        messages: Chat messages in Ollama format, each with:
+            - role: "system", "user", or "assistant"
+            - content: message text
+        model: Ollama model name.
+        temperature: Sampling temperature. Use 0.0 for more deterministic RAG output.
+
     Returns:
-        str: The generated answer from the model, stripped of leading/trailing whitespace.
+        The generated assistant response as a stripped string.
+
     Raises:
-        RuntimeError: If the Ollama generation fails for any reason, wrapping the
-            original exception message.
-    Example:
-        >>> messages = [{"role": "user", "content": "What is the capital of France?"}]
-        >>> answer = generate_answer_local(messages, model="llama3:8b")
-        >>> print(answer)
-        'Paris is the capital of France.'
+        RuntimeError: If the Ollama request fails.
+        ValueError: If messages is empty or malformed.
     """
-    print("Generating answer with model:", model)
+    if not messages:
+        raise ValueError("messages must not be empty")
+
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            raise ValueError(f"messages[{i}] must be a dict")
+        if "role" not in msg or "content" not in msg:
+            raise ValueError(f"messages[{i}] must contain 'role' and 'content' keys")
+
     try:
+        print(f"Generating answer with model: {model}")
+
         response = ollama.chat(
             model=model,
             messages=messages,
             options={
-                "temperature": 0.0,   # keep deterministic for RAG
-            }
+                "temperature": temperature,
+            },
         )
-        return response.message.content.strip()
+
+        content = response.message.content
+        if content is None:
+            raise RuntimeError("Ollama returned an empty response")
+
+        return content.strip()
 
     except Exception as e:
-        raise RuntimeError(f"Ollama generation failed: {str(e)}")
+        raise RuntimeError(f"Ollama generation failed: {e}") from e
+    
 
 def load_retrieved(path: str) -> List[Dict[str, Any]]:
     """
