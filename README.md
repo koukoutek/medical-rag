@@ -170,3 +170,121 @@ python chunk_documents.py --metadata data/raw/metadata.json --text_dir data/raw/
 
 
 
+## 3. Medical RAG FAISS Indexing Pipeline
+
+This repository contains a Python script that turns a JSONL file of text chunks into a reproducible FAISS vector index for medical retrieval-augmented generation (RAG).
+
+### What the script does
+
+The script reads a `chunks.jsonl` file where each record contains:
+
+* `chunk_id`
+* `doc_id`
+* `page_number`
+* `chunk_text`
+
+It then:
+
+1. loads all chunks from the JSONL file
+2. sorts them deterministically by `chunk_id`
+3. creates an embedding for each chunk
+4. stores the vectors in a FAISS index
+5. writes a metadata file that maps each vector back to its source chunk
+6. saves the exact indexing configuration used for the run
+
+### Why this pipeline is reproducible
+
+The pipeline is designed to be repeatable across runs:
+
+* chunks are sorted before embedding so vector order is stable
+* a fixed random seed is set
+* the embedding model name is recorded in the config file
+* the batch size and normalization setting are saved
+* the metadata file is written in the same order as the FAISS vectors
+
+This means vector `0` in the index always corresponds to line `0` in the metadata file, vector `1` to line `1`, and so on.
+
+### Input format
+
+The input must be a JSONL file. Each line should look like this:
+
+```json
+{"chunk_id": "c001", "doc_id": "doc_01", "page_number": 3, "chunk_text": "..."}
+```
+
+Only the required fields are used by the script, but the chunk text must be present for embedding.
+
+### Output files
+
+The script writes three files into the output directory:
+
+* `faiss.index` — the saved FAISS vector index
+* `chunk_metadata.jsonl` — one metadata record per vector
+* `index_config.json` — the exact configuration used to build the index
+
+#### `chunk_metadata.jsonl`
+
+Each line contains:
+
+* `vector_id`
+* `chunk_id`
+* `doc_id`
+* `page_number`
+* `chunk_text`
+
+This file is what you use to trace retrieval results back to the original chunk.
+
+### Embedding model
+
+The script uses a `SentenceTransformer` model by default:
+
+```bash
+sentence-transformers/all-MiniLM-L6-v2
+```
+
+This is a strong lightweight baseline for semantic retrieval. It is fast, easy to run locally, and works well for small to medium corpora.
+
+### Similarity setup
+
+The script supports two FAISS modes:
+
+* **L2 distance** when embeddings are not normalized
+* **Inner product** when `--normalize` is enabled
+
+When normalization is enabled, inner product behaves like cosine similarity.
+
+### How to run
+
+Install dependencies:
+
+```bash
+pip install faiss-cpu sentence-transformers numpy
+```
+
+Run the indexing script:
+
+```bash
+python medical_rag_faiss_indexer.py \
+  --input chunks.jsonl \
+  --output-dir artifacts/index \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --batch-size 64 \
+  --normalize
+```
+
+### Example output structure
+
+```text
+artifacts/index/
+├── faiss.index
+├── chunk_metadata.jsonl
+└── index_config.json
+```
+
+### Notes for medical RAG
+
+For medical text, this pipeline gives you a reliable baseline. A stronger domain-specific embedding model may improve retrieval quality, but the overall indexing process stays the same.
+
+### Summary
+
+This script provides a simple, reproducible way to turn chunked medical text into a searchable FAISS index with a metadata file that preserves the link between each vector and its source chunk.
